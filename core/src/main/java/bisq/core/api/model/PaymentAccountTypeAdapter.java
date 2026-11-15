@@ -25,6 +25,8 @@ import bisq.core.locale.TradeCurrency;
 import bisq.core.payment.CountryBasedPaymentAccount;
 import bisq.core.payment.MoneyGramAccount;
 import bisq.core.payment.PaymentAccount;
+import bisq.core.payment.SepaAccount;
+import bisq.core.payment.SepaInstantAccount;
 import bisq.core.payment.payload.PaymentAccountPayload;
 
 import com.google.gson.TypeAdapter;
@@ -36,10 +38,12 @@ import java.io.IOException;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
@@ -133,6 +137,9 @@ class PaymentAccountTypeAdapter extends TypeAdapter<PaymentAccount> {
         for (String s : JSON_COMMENTS) {
             out.value(s);
         }
+        if (account instanceof SepaAccount || account instanceof SepaInstantAccount) {
+            out.value("Optional: add acceptedCountryCodes as an array of country codes, e.g. [\"DE\", \"AT\"].");
+        }
         if (account.hasPaymentMethodWithId("SWIFT_ID")) {
             // Add extra comments for more complex swift account form.
             List<String> wrappedSwiftComments = Res.getWrappedAsList("payment.swift.info.account", 110);
@@ -214,9 +221,15 @@ class PaymentAccountTypeAdapter extends TypeAdapter<PaymentAccount> {
     @Override
     public PaymentAccount read(JsonReader in) throws IOException {
         PaymentAccount account = initNewPaymentAccount();
+        Set<String> acceptedCountryCodes = null;
         in.beginObject();
         while (in.hasNext()) {
             String currentFieldName = in.nextName();
+
+            if (currentFieldName.equals("acceptedCountryCodes")) {
+                acceptedCountryCodes = readAcceptedCountryCodes(in);
+                continue;
+            }
 
             // The tradeCurrencies field is common to all payment account types,
             // but has no setter.
@@ -250,7 +263,49 @@ class PaymentAccountTypeAdapter extends TypeAdapter<PaymentAccount> {
             });
         }
         in.endObject();
+        if (acceptedCountryCodes != null) {
+            applyAcceptedCountryCodes(account, acceptedCountryCodes);
+        }
         return account;
+    }
+
+    private Set<String> readAcceptedCountryCodes(JsonReader in) throws IOException {
+        if (in.peek() != JsonToken.BEGIN_ARRAY) {
+            throw new IllegalArgumentException("acceptedCountryCodes must be an array of country codes.");
+        }
+        Set<String> codes = new LinkedHashSet<>();
+        in.beginArray();
+        while (in.hasNext()) {
+            if (in.peek() != JsonToken.STRING) {
+                throw new IllegalArgumentException("acceptedCountryCodes must contain only strings.");
+            }
+            codes.add(in.nextString().trim().toUpperCase(Locale.ROOT));
+        }
+        in.endArray();
+        if (codes.isEmpty()) {
+            throw new IllegalArgumentException("acceptedCountryCodes must contain at least one country code.");
+        }
+        return codes;
+    }
+
+    private void applyAcceptedCountryCodes(PaymentAccount account, Set<String> codes) {
+        List<String> accepted;
+        if (account instanceof SepaAccount sepa) {
+            accepted = sepa.getAcceptedCountryCodes();
+        } else if (account instanceof SepaInstantAccount sepaInstant) {
+            accepted = sepaInstant.getAcceptedCountryCodes();
+        } else {
+            throw new IllegalArgumentException("acceptedCountryCodes is only supported for SEPA and SEPA Instant.");
+        }
+        // The new account starts with the complete set of eligible countries.
+        for (String code : codes) {
+            if (!accepted.contains(code)) {
+                throw new IllegalArgumentException(format("Unsupported country code in acceptedCountryCodes: '%s'.", code));
+            }
+        }
+        accepted.clear();
+        accepted.addAll(codes);
+        account.onPersistChanges();
     }
 
     private void invokeSetterMethod(PaymentAccount account, Field field, JsonReader jsonReader) {
