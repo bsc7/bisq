@@ -2037,6 +2037,12 @@ message PreferencesPayload {
     bool trade_rules_accepted = 73;
     int64 cold_storage_reminder_threshold = 74;
     double bsq_offer_price_range_factor = 75;
+    bool use_ntfy_notifications = 76;
+    string ntfy_server_url = 77;
+    string ntfy_topic = 78;
+    string ntfy_access_token = 79;
+    bool ntfy_include_details = 80;
+    bool ntfy_allow_insecure_lan = 81;
 }
 
 message AutoConfirmSettings {
